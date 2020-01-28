@@ -1,0 +1,256 @@
+ Steps to create single pod with multiple containers 
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multipod
+spec:
+  containers:
+  - name: event-simulator
+    image: kodekloud/event-simulator 
+  - name: nginx
+    image: nginx
+ 
+ Steps to create service for an existing pod and then use nslookup DNS of the service
+ kubectl expose deployment webapp --type=NodePort --name=webapp-service
+ kubectl apply -f https://k8s.io/examples/admin/dns/dnsutils.yaml
+ kubectl exec -it dnsutils -- nslookup webapp-service
+ 
+ Steps to install kubeadm and config master node. 
+master$sudo apt-get update
+master$sudo apt-get install -y kubelet kubeadm kubectl
+master$sudo apt-mark hold kubelet kubeadm kubectl
+master$kubeadm init --config <filename>
+master$mkdir -p $HOME/.kube
+master$sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+master$sudo chown $(id -u):$(id -g) $HOME/.kube/config
+master$kubectl token create --print-join-command
+master$sysctl net.bridge.bridge-nf-call-iptables=1
+
+node01r$sudo apt-get update
+node01$sudo apt-get install -y kubelet kubeadm kubectl
+node01$sudo apt-mark hold kubelet kubeadm kubectl
+node01$kubeadm join 172.17.0.68:6443 --token fnsf6v.3o5y2mornabe92xx --discovery-token-ca-cert-hash sha256:38af75c714b4a8c571f9547ac8df1705616253d93967d03a50bfdfbda73a9d6f
+node01$sysctl net.bridge.bridge-nf-call-iptables=1
+
+master$kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
+master$kubectl get nodes
+ 
+ Steps to create static pod definition file and copy it to the worker node to /etc/kubernetes/manifests. Update kubectl config file to have the location of the manifests file and ensure static pods are running. systemctl daemon-reload
+ $kubectl run webapp --generator=run-pod --image=nginx --dry-run -o yaml > webapp.yml
+ $scp webapp.yml worker01:/etc/kubernetes/manifests
+ Environment="KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml"   \\ ENV in /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+ ### staticPodPath: /etc/kubernetes/manifests   \\If file is /var/lib/kubelet/config.yaml
+ --pod-manifest-path=/etc/kubernetes/manifests  \\File location /etc/systemd/system/kubelet.service
+ sudo systemctl daemon-reload
+ sudo systemctl restart kubelet
+ 
+ Worker Nodes 
+ sudo systemctl enable kubelet kube-proxy
+ sudo systemctl start kubelet kube-proxy
+ 
+ Deployment
+ kubectl set image deployment/<deployment name> <pod name>=nginx:1.9.1 --record
+ kubectl rollout status deployment/app
+ kubectl rollout history deployment/app
+ kubectl rollout undo deployment/app --to-revision=1 --record
+ 
+ Secret POD
+ kubectl create secret generic mysecret --from-literal=password='sc3ret'
+ kubectl get secret mysecret — namespace=default — export -o yaml |\ kubectl apply — namespace=hr -f -
+## POD created using test-secret 
+apiVersion: v1
+kind: Pod
+metadata:
+  name: envfrom-secret
+spec:
+  containers:
+  - name: envars-test-container
+    image: nginx
+    envFrom:
+    - secretRef:
+        name: test-secret
+
+
+kubectl create secret generic backend-user --from-literal=backend-username='backend-admin'
+##POD using environment variable secret
+apiVersion: v1
+kind: Pod
+metadata:
+  name: env-single-secret
+spec:
+  containers:
+  - name: envars-test-container
+    image: nginx
+    env:
+    - name: SECRET_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: backend-user
+          key: backend-username
+
+
+##POD Using mount point secret
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp
+spec:
+  containers:
+  - name: mypod
+    image: redis
+    volumeMounts:
+    - name: secret-volume
+      mountPath: /etc/secret
+  volumes:
+  - name: secret-volume
+    secret:
+      secretName: mysecret
+
+
+ Volume POD 
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-log
+spec:
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 100Mi
+  hostPath:
+    path: /pv/log
+########## PVC	
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claim-log-1
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Mi
+
+
+ PVC POD
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp
+spec:
+  containers:
+  - name: event-simulator
+    image: kodekloud/event-simulator
+    env:
+    - name: LOG_HANDLERS
+      value: file
+    volumeMounts:
+    - mountPath: /log
+      name: log-volume
+
+  volumes:
+  - name: log-volume
+    persistentVolumeClaim:
+      claimName: claim-log-1 
+ 
+ JSONPATH
+ sudo apt install jq
+ kubectl get nodes -o json | jq '.items[].spec.taints' > /tmp/output.txt
+ kubectl get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints --no-headers
+ 
+ kubectl get service webapp-service -o json |jq '.subsets[].addresses[].targetRef.name'
+ kubectl top pod -o jsonpath='{.items[*].metadata.labels.name}'
+ kubectl get pods --sort-by=.metadata.name
+ 
+ Create service for a pod using --NodePort
+ kubectl expose deployment webapp --type=NodePort --name=webapp-service --dry-run -o yaml > webapp-service.yml
+   
+ Scale Deployment
+ kubectl scale deployment/webapp --replicas=3  
+ 
+ Create clusterrole
+ kubectl create clusterrole pod-reader --verb=get,list,watch --resource=pods
+ 
+ 
+ Control Pane
+ $ env | grep -i kube  \\User must have kubernetes cluster configuration environment variable. If not set KUBECONFIG=/home/user/.kube/config
+ $ systemctl status docker \\Docker service must be running. 
+ $ systemctl status kubelet \\Kubelet service must be running
+ $ netstat -pnlt | grep 6443 \\TCP port 6443 should be listed as listening port
+ $ firewall-cmd --list-all \\ Check firewall/iptables Rules matching requirements
+ $ journalctl -xeu kubelet \\Check logs
+ $ kubeadm-setup.sh restart \\Try restarting Kubernetes cluster
+ 
+ Create daemonset with image and ensure pod run on each node
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: monitoring-daemon
+spec: 
+  selector:
+    matchLabels:
+      app: monitoring-agent
+  template:
+    metadata:
+        labels:
+            app: monitoring-agent
+    spec:
+        containers:
+        - name: monitoring-agent
+          image: monitoring-agent     
+ 
+ Create a pod in different namespace. Namespace should be created first
+ kubectl create namespace finance
+ kubectl run --generator=run-pod/v1 messaging --image=redis:alpine
+ 
+ Make a worker node unschedule all pods running on that node
+ kubectl cordon node01
+ kubectl drain node01 --ignore-daemonsets
+ 
+ Find the error message from a pod of directory not availabe and copy output to a file
+ kubectl logs app -n kube-system | grep "Not Found"
+ 
+ Snapshot etcd to a file provide all certs
+ ETCDCTL_API=3 etcdctl snapshot save /opt/share/snapshot.db --endpoints=https://127.0.0.1:2379 --cacert=/etc/etcd/ca.crt --cert=/etc/etcd/etcd-server.crt --key=/etc/etcd/etcd-server.key
+ ETCDCTL_API=3 etcdctl snapshot status /opt/share/snapshot.db --endpoints=https://127.0.0.1:2379 --cacert=/etc/etcd/ca.crt --cert=/etc/etcd/etcd-server.crt --key=/etc/etcd/etcd-server.key
+ 
+ Create initcontainer within a pod that create a file and pod terminates if the file doesn't exist 
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp
+spec: 
+  initContainers:
+  - name: init-myservice
+    image: busybox
+    command: ['sh', '-c', 'git clone <some-repository-that-will-be-used-by-application> ; done;']
+  schedulerName: kube-scheduler-master 
+ 
+ 
+ Create a pod with labels and envirnment variables 
+ kubectl run --generator=run-pod/v1 nginx --image=nginx --labels tier=front-end
+ kubectl get pods --labels=front-end
+ 
+ **Storage question VOlume MountPoint in a pod
+ apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp
+spec:
+  containers:
+  - name: event-simulator
+    image: kodekloud/event-simulator
+    env:
+    - name: LOG_HANDLERS
+      value: file
+    volumeMounts:
+    - mountPath: /log
+      name: log-volume
+
+  volumes:
+  - name: log-volume
+    hostPath:
+      # directory location on host
+      path: /var/log/webapp
+      # this field is optional
+      type: Directory
